@@ -49,7 +49,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
     let (outgoing, incoming) = ws_stream.split();
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
-        println!("Received a message from {}: {}", addr, msg.to_text().unwrap());
+        println!("Received a message from {}", addr);
         let peers = peer_map.lock().unwrap();
 
         // We want to broadcast the message to everyone except ourselves.
