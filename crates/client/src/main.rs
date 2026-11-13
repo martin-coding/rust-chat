@@ -1,35 +1,39 @@
-//! A simple example of hooking up stdin/stdout to a WebSocket stream.
-//!
-//! The first command-line argument is your username, which is appended to every message.
-//! 
-//! You will then connect to a localhost server and
-//! forward all data read on stdin to the server, printing out all data
-//! received on stdout.
-//!
-//! Note that this is not currently optimized for performance, especially around
-//! buffer management. Rather it's intended to show an example of working with a
-//! client.
-//!
-//! This client works together with the `server`.
-
 use std::env;
 use std::fs;
 
 use futures_util::{future, pin_mut, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{client_async, tungstenite::protocol::Message};
 
 use chacha20poly1305::{
     aead::{Aead, Generate, Key, KeyInit},
     ChaCha20Poly1305, Nonce
 };
 
+use arti_client::{TorClient, TorClientConfig};
+
 #[tokio::main]
 async fn main() {
-    let url = String::from("ws://localhost:8080/");
-    let username = env::args().nth(1).unwrap_or_else(|| panic!("this program requires at least one argument"));
+    let args: Vec<String> = env::args().collect();
 
-    let key_bytes = fs::read("client.key")
+    if args.len() != 3 {
+        eprintln!("Usage: {} <username> <address>", args[0]);
+        std::process::exit(1);
+    }
+
+    let username = args[1].clone();
+    let host = args[2].trim_end_matches('/').to_string();
+
+    let config = TorClientConfig::default();
+    let tor_client = TorClient::create_bootstrapped(config)
+        .await
+        .expect("Bootstrap");
+
+    let tor_stream = tor_client.connect((host.as_str(), 80)).await.expect("Tor stream");
+
+    let url = format!("ws://{}/", host);
+
+    let key_bytes = fs::read("e2e.key")
         .expect("Should have been able to read the file");
 
     let key = Key::<ChaCha20Poly1305>::try_from(key_bytes.as_slice())
@@ -40,8 +44,9 @@ async fn main() {
     let (stdin_tx, stdin_rx) = futures_channel::mpsc::unbounded();
     tokio::spawn(read_stdin(stdin_tx, username.clone(), cipher.clone()));
 
-    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
-    println!("WebSocket handshake has been successfully completed");
+    let (ws_stream, _) = client_async(&url, tor_stream).await.expect("WebSocket handshake failed");
+
+    println!("WebSocket connected through Tor!");
 
     let (write, read) = ws_stream.split();
 
